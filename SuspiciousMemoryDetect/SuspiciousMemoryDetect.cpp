@@ -14,139 +14,6 @@
 #include <tchar.h>
 #pragma comment (lib, "Shlwapi.lib")
 
-
-BOOL ScanProcess(HANDLE hProcess)
-{
-	SYSTEM_INFO sysInfo;
-	GetSystemInfo(&sysInfo);
-
-	MEMORY_BASIC_INFORMATION memInfo;
-
-	uintptr_t procMinAddress = (uintptr_t)sysInfo.lpMinimumApplicationAddress;
-	uintptr_t procMaxAddress = (uintptr_t)sysInfo.lpMaximumApplicationAddress;
-
-	while (procMinAddress < procMaxAddress)
-	{
-		if (VirtualQueryEx(hProcess, (LPVOID)procMinAddress, &memInfo, sizeof(MEMORY_BASIC_INFORMATION)))
-		{
-			char * buffer;
-			if ((memInfo.Protect == PAGE_EXECUTE_READ ||
-				memInfo.Protect == PAGE_EXECUTE_WRITECOPY) &&
-				memInfo.State == MEM_COMMIT)
-			{
-				buffer = new char[memInfo.RegionSize];
-				SIZE_T bytesRead;
-
-				ReadProcessMemory(hProcess, memInfo.BaseAddress, buffer, memInfo.RegionSize, &bytesRead);
-
-				_tprintf(TEXT("\n[-] Looking for Pattern in region starting at 0x%08X"), (uintptr_t)memInfo.BaseAddress);
-				if (FindPatternBuffer(buffer, bytesRead, (char*)"\x8D\x84\x83\xBC\x02\x00\x00\x8D\xBB\xE4\x02\x00\x00", (char*)"xxxxxxxxxxxxx"))
-				{
-					_tprintf(TEXT("\n[+] Pattern found in region starting at 0x%08X"), (uintptr_t)memInfo.BaseAddress);
-					CloseHandle(hProcess);
-					return TRUE;
-				}
-				delete[] buffer;
-			}
-		}
-		procMinAddress = procMinAddress + (DWORD)memInfo.RegionSize;
-	}
-	CloseHandle(hProcess);
-	return FALSE;
-}
-
-std::vector<DWORD> GetProcessIDs()
-{
-	std::vector<DWORD> processes;
-	HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, NULL);
-	PROCESSENTRY32 pe;
-	pe.dwSize = sizeof(PROCESSENTRY32);
-	if (hSnapshot != INVALID_HANDLE_VALUE) {
-		if (Process32First(hSnapshot, &pe)) {
-			do {
-				processes.push_back(pe.th32ProcessID);
-			} while (Process32Next(hSnapshot, &pe));
-		}
-	}
-	CloseHandle(hSnapshot);
-	return processes;
-}
-
-BOOL ScanProcesses(std::vector<DWORD> pIds)
-{
-	for (std::vector<DWORD>::iterator it = pIds.begin(); it != pIds.end(); ++it)
-	{
-		HANDLE pHandle;
-		if (pHandle = OpenProcess(PROCESS_ALL_ACCESS, 0, *it))
-		{
-			if (ScanProcess(pHandle))
-				return TRUE;
-		}
-	}
-	return FALSE;
-}
-
-HANDLE GetHandle(LPCWSTR window)
-{
-	HWND hwnd = FindWindow(NULL, window);
-	HANDLE pHandle;
-	DWORD pid;
-
-	if (GetWindowThreadProcessId(hwnd, &pid))
-	{
-		if (pHandle = OpenProcess(PROCESS_ALL_ACCESS, 0, pid))
-		{
-			return pHandle;
-		}
-	}
-	return NULL;
-}
-
-BOOL ScanThreads(HANDLE pHandle)
-{
-	DWORD pid;
-
-	pid = GetProcessId(pHandle);
-
-	HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
-	if (hSnap != INVALID_HANDLE_VALUE)
-	{
-		THREADENTRY32 te;
-		te.dwSize = sizeof(THREADENTRY32);
-
-		BOOL Ret = Thread32First(hSnap, &te);
-		while (Ret)
-		{
-			if (te.th32OwnerProcessID == pid)
-			{
-				HANDLE checkThread = OpenThread(THREAD_ALL_ACCESS, FALSE, te.th32ThreadID);
-				if (!checkThread)
-				{
-					continue;
-				}
-
-				ULONG_PTR tStartAddress = GetThreadStartAddress(checkThread);
-
-				DWORD oldProtect;
-				VirtualProtectEx(checkThread, (LPVOID)tStartAddress, 1000, PAGE_EXECUTE_READ, &oldProtect);
-
-				if (FindPattern((DWORD)tStartAddress, 0x70000, (char*)"\x8B\x45\x10\x50\x8B\x4D\x0C\x51\x8B\x55\x08\x52\xE8", (char*)"xxxxxxxxxxxxx"))
-				{
-					_tprintf(TEXT("\n[+] Pattern found in thread starting at 0x%08X"), (uintptr_t)tStartAddress);
-					VirtualProtectEx(checkThread, (LPVOID)tStartAddress, 1000, oldProtect, NULL);
-					CloseHandle(checkThread);
-					return TRUE;
-				}
-
-				VirtualProtectEx(checkThread, (LPVOID)tStartAddress, 1000, oldProtect, NULL);
-				CloseHandle(checkThread);
-			}
-			Ret = Thread32Next(hSnap, &te);
-		}
-	}
-	return FALSE;
-}
-
 std::vector<uintptr_t> EnumerateProcessHandles(std::vector<DWORD> processList, const wchar_t * protectedProcess)
 {
 	std::vector<uintptr_t> handles;
@@ -286,6 +153,138 @@ BOOL ScanExecutablePages(HANDLE pHandle)
 			}
 		}
 		procMinAddress = procMinAddress + (DWORD)memInfo.RegionSize;
+	}
+	return FALSE;
+}
+
+BOOL ScanProcess(HANDLE hProcess)
+{
+	SYSTEM_INFO sysInfo;
+	GetSystemInfo(&sysInfo);
+
+	MEMORY_BASIC_INFORMATION memInfo;
+
+	uintptr_t procMinAddress = (uintptr_t)sysInfo.lpMinimumApplicationAddress;
+	uintptr_t procMaxAddress = (uintptr_t)sysInfo.lpMaximumApplicationAddress;
+
+	while (procMinAddress < procMaxAddress)
+	{
+		if (VirtualQueryEx(hProcess, (LPVOID)procMinAddress, &memInfo, sizeof(MEMORY_BASIC_INFORMATION)))
+		{
+			char * buffer;
+			if ((memInfo.Protect == PAGE_EXECUTE_READ ||
+				memInfo.Protect == PAGE_EXECUTE_WRITECOPY) &&
+				memInfo.State == MEM_COMMIT)
+			{
+				buffer = new char[memInfo.RegionSize];
+				SIZE_T bytesRead;
+
+				ReadProcessMemory(hProcess, memInfo.BaseAddress, buffer, memInfo.RegionSize, &bytesRead);
+
+				_tprintf(TEXT("\n[-] Looking for Pattern in region starting at 0x%08X"), (uintptr_t)memInfo.BaseAddress);
+				if (FindPatternBuffer(buffer, bytesRead, (char*)"\x8D\x84\x83\xBC\x02\x00\x00\x8D\xBB\xE4\x02\x00\x00", (char*)"xxxxxxxxxxxxx"))
+				{
+					_tprintf(TEXT("\n[+] Pattern found in region starting at 0x%08X"), (uintptr_t)memInfo.BaseAddress);
+					CloseHandle(hProcess);
+					return TRUE;
+				}
+				delete[] buffer;
+			}
+		}
+		procMinAddress = procMinAddress + (DWORD)memInfo.RegionSize;
+	}
+	CloseHandle(hProcess);
+	return FALSE;
+}
+
+std::vector<DWORD> GetProcessIDs()
+{
+	std::vector<DWORD> processes;
+	HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, NULL);
+	PROCESSENTRY32 pe;
+	pe.dwSize = sizeof(PROCESSENTRY32);
+	if (hSnapshot != INVALID_HANDLE_VALUE) {
+		if (Process32First(hSnapshot, &pe)) {
+			do {
+				processes.push_back(pe.th32ProcessID);
+			} while (Process32Next(hSnapshot, &pe));
+		}
+	}
+	CloseHandle(hSnapshot);
+	return processes;
+}
+
+BOOL ScanProcesses(std::vector<DWORD> pIds)
+{
+	for (std::vector<DWORD>::iterator it = pIds.begin(); it != pIds.end(); ++it)
+	{
+		HANDLE pHandle;
+		if (pHandle = OpenProcess(PROCESS_ALL_ACCESS, 0, *it))
+		{
+			if (ScanProcess(pHandle))
+				return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+HANDLE GetHandle(LPCWSTR window)
+{
+	HWND hwnd = FindWindow(NULL, window);
+	HANDLE pHandle;
+	DWORD pid;
+
+	if (GetWindowThreadProcessId(hwnd, &pid))
+	{
+		if (pHandle = OpenProcess(PROCESS_ALL_ACCESS, 0, pid))
+		{
+			return pHandle;
+		}
+	}
+	return NULL;
+}
+
+BOOL ScanThreads(HANDLE pHandle)
+{
+	DWORD pid;
+
+	pid = GetProcessId(pHandle);
+
+	HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+	if (hSnap != INVALID_HANDLE_VALUE)
+	{
+		THREADENTRY32 te;
+		te.dwSize = sizeof(THREADENTRY32);
+
+		BOOL Ret = Thread32First(hSnap, &te);
+		while (Ret)
+		{
+			if (te.th32OwnerProcessID == pid)
+			{
+				HANDLE checkThread = OpenThread(THREAD_ALL_ACCESS, FALSE, te.th32ThreadID);
+				if (!checkThread)
+				{
+					continue;
+				}
+
+				ULONG_PTR tStartAddress = GetThreadStartAddress(checkThread);
+
+				DWORD oldProtect;
+				VirtualProtectEx(checkThread, (LPVOID)tStartAddress, 1000, PAGE_EXECUTE_READ, &oldProtect);
+
+				if (FindPattern((DWORD)tStartAddress, 0x70000, (char*)"\x8B\x45\x10\x50\x8B\x4D\x0C\x51\x8B\x55\x08\x52\xE8", (char*)"xxxxxxxxxxxxx"))
+				{
+					_tprintf(TEXT("\n[+] Pattern found in thread starting at 0x%08X"), (uintptr_t)tStartAddress);
+					VirtualProtectEx(checkThread, (LPVOID)tStartAddress, 1000, oldProtect, NULL);
+					CloseHandle(checkThread);
+					return TRUE;
+				}
+
+				VirtualProtectEx(checkThread, (LPVOID)tStartAddress, 1000, oldProtect, NULL);
+				CloseHandle(checkThread);
+			}
+			Ret = Thread32Next(hSnap, &te);
+		}
 	}
 	return FALSE;
 }
