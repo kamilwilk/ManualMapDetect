@@ -55,7 +55,6 @@ BOOL ScanProcess(HANDLE hProcess)
 	return FALSE;
 }
 
-//DONE
 std::vector<DWORD> GetProcessIDs()
 {
 	std::vector<DWORD> processes;
@@ -73,7 +72,6 @@ std::vector<DWORD> GetProcessIDs()
 	return processes;
 }
 
-//DONE
 BOOL ScanProcesses(std::vector<DWORD> pIds)
 {
 	for (std::vector<DWORD>::iterator it = pIds.begin(); it != pIds.end(); ++it)
@@ -88,7 +86,6 @@ BOOL ScanProcesses(std::vector<DWORD> pIds)
 	return FALSE;
 }
 
-//DONE
 HANDLE GetHandle(LPCWSTR window)
 {
 	HWND hwnd = FindWindow(NULL, window);
